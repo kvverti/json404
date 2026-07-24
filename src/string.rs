@@ -1,8 +1,120 @@
-use std::{borrow::Cow, fmt::Display, string::String as StdString};
+use std::{borrow::Cow, fmt::{Debug, Display}, string::String as StdString};
 use crate::parse::{Expected, Reason, SyntaxError, try_parse};
+
+/// A Unicode codepoint. A `Codepoint` is like a `char`, except that surrogate
+/// codepoints are allowed.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[repr(transparent)]
+pub struct Codepoint(u32);
+
+impl Codepoint {
+    /// Constructs a `Codepoint` with the given Unicode codepoint
+    /// index. Returns `None` if the index is out of range.
+    pub const fn new(index: u32) -> Option<Self> {
+        if index <= 0x1F_FFFF {
+            Some(Self(index))
+        } else {
+            None
+        }
+    }
+
+    /// Constructs the `Codepoint` corresponding to the given `char`.
+    pub const fn from_char(c: char) -> Self {
+        Self(c as u32)
+    }
+
+    /// Returns the `char` corresponding to this codepoint, if it is
+    /// not a surrogate codepoint.
+    pub const fn to_char(self) -> Option<char> {
+        char::from_u32(self.0)
+    }
+
+    /// Constructs a `Codepoint` on the basic multilingual plane. This plane
+    /// contains the surrogate codepoints.
+    pub const fn from_bmp(index: u16) -> Self {
+        Self(index as u32)
+    }
+
+    /// Whether this codepoint is a surrogate codepoint.
+    /// Surrogate codepoints are the range U+D800 through U+DFFF.
+    pub const fn is_surrogate(self) -> bool {
+        matches!(self.0, 0xD800..=0xDFFF)
+    }
+}
+
+impl Debug for Codepoint {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "U+{:X}", self.0)?;
+        if let Some(c) = self.to_char() {
+            write!(f, " '{}'", c)?;
+        }
+        Ok(())
+    }
+}
+
+impl From<char> for Codepoint {
+    fn from(value: char) -> Self {
+        Self::from_char(value)
+    }
+}
+
+/// A trait for types which may be turned into a sequence of codepoints.
+pub trait ToCodepoints {
+    /// The [`Iterator`] type returned by [`Self::into_codepoints`].
+    type CodepointIter<'a>: Iterator<Item = Codepoint> where Self: 'a;
+
+    /// Produce a sequence of codepoints from the given value.
+    fn to_codepoints(&self) -> Self::CodepointIter<'_>;
+}
+
+#[derive(Debug, Clone)]
+pub struct StrCodepoints<'a> {
+    iter: std::str::Chars<'a>,
+}
+
+impl Iterator for StrCodepoints<'_> {
+    type Item = Codepoint;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        Some(Codepoint::from_char(self.iter.next()?))
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.iter.size_hint()
+    }
+}
+
+impl DoubleEndedIterator for StrCodepoints<'_> {
+    fn next_back(&mut self) -> Option<Self::Item> {
+        Some(Codepoint::from_char(self.iter.next_back()?))
+    }
+}
+
+impl ToCodepoints for str {
+    type CodepointIter<'a> = StrCodepoints<'a>;
+
+    fn to_codepoints(&self) -> Self::CodepointIter<'_> {
+        StrCodepoints { iter: self.chars() }
+    }
+}
+
+impl ToCodepoints for [Codepoint] {
+    type CodepointIter<'a> = std::iter::Copied<std::slice::Iter<'a, Codepoint>>;
+    
+    fn to_codepoints(&self) -> Self::CodepointIter<'_> {
+        self.into_iter().copied()
+    }
+}
 
 /// A JSON string. A string is a sequence of Unicode code points, which may contain unpaired surrogates due to
 /// Unicode escape sequences.
+/// 
+/// # Comparison
+/// This library makes the choice to compare JSON strings literally, without normalizing Unicode escapes.
+/// For example, the following pairs of JSON strings are considered unequal.
+/// - `"Hello"` and `"Hell\u006F"` (Unicode escapes are not decoded)
+/// - `"\uabcd"` and `"\uABCD"` (case of Unicode escapes is not normalized)
+/// - `"\n"` and `"\u000A` (Unicode escapes and simple escapes are not normalized)
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct String<'src> {
     /// The underlying data.
@@ -44,11 +156,32 @@ impl<'src> String<'src> {
     pub fn chars(&self) -> Chars<'_> {
         Chars { src: self.parts().peekable() }
     }
+
+    /// Returns whether this string matches the given codepoint sequence.
+    pub fn codepoint_eq<I: ToCodepoints>(&self, other: &I) -> bool {
+        let mut these_codepoints = self.codepoints();
+        let mut those_codepoints = other.to_codepoints();
+        loop {
+            match (these_codepoints.next(), those_codepoints.next()) {
+                (None, None) => break true,
+                (Some(a), Some(b)) if a != b => break false,
+                _ => continue,
+            }
+        }
+    }
 }
 
 impl Display for String<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "\"{}\"", &self.bytes)
+    }
+}
+
+impl<'src> ToCodepoints for String<'src> {
+    type CodepointIter<'a> = Codepoints<'a> where Self: 'a;
+
+    fn to_codepoints(&self) -> Self::CodepointIter<'_> {
+        self.codepoints()
     }
 }
 
@@ -117,14 +250,14 @@ pub struct Codepoints<'src> {
 }
 
 impl Iterator for Codepoints<'_> {
-    type Item = Result<u32, SyntaxError>;
+    type Item = Codepoint;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let part = try_parse!(self.src.next())?;
+        let part = self.src.next()?.expect("JSON string should be valid");
         match part {
-            StringPart::Char(c) => Some(Ok(c.into())),
-            StringPart::Escape(StringEscape::Short(code)) => Some(Ok(code as u8 as u32)),
-            StringPart::Escape(StringEscape::Unicode(digits)) => Some(Ok(digits.to_codepoint().into())),
+            StringPart::Char(c) => Some(c.into()),
+            StringPart::Escape(StringEscape::Short(code)) => Some(Codepoint::from_bmp(code as u16)),
+            StringPart::Escape(StringEscape::Unicode(digits)) => Some(Codepoint::from_bmp(digits.to_codepoint())),
         }
     }
 }
