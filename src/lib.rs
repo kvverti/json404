@@ -16,6 +16,15 @@ enum CowSlice<'src, T> {
     Owned(Vec<T>),
 }
 
+impl<T> CowSlice<'_, T> {
+    const fn as_slice(&self) -> &[T] {
+        match self {
+            CowSlice::Borrowed(values) => values,
+            CowSlice::Owned(values) => values.as_slice(),
+        }
+    }
+}
+
 impl<T: Clone> CowSlice<'_, T> {
     fn to_mut(&mut self) -> &mut Vec<T> {
         if let Self::Borrowed(items) = self {
@@ -39,10 +48,7 @@ impl<T> Deref for CowSlice<'_, T> {
     type Target = [T];
 
     fn deref(&self) -> &Self::Target {
-        match self {
-            CowSlice::Borrowed(values) => values,
-            CowSlice::Owned(values) => values,
-        }
+        self.as_slice()
     }
 }
 
