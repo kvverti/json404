@@ -1,8 +1,54 @@
-use std::{fmt::{Display, Write}, slice};
+use std::{
+    fmt::{Display, Write},
+    slice,
+};
 
-use crate::{string, CowSlice, Value};
+use crate::{
+    string::{self, ToCodepoints},
+    CowSlice, Value,
+};
 
 type KV<'src> = (string::String<'src>, Value<'src>);
+
+mod sealed {
+    pub trait Sealed {}
+
+    impl Sealed for super::Exact<'_> {}
+    impl<T: super::ToCodepoints> Sealed for T {}
+}
+
+/// A trait that abstracts the notion of comparing object keys.
+pub trait Key: sealed::Sealed {
+    /// Whether this key is equivalent to the given string.
+    fn equivalant(&self, key: string::String<'_>) -> bool;
+
+    /// Produce a string equivalent to this key.
+    fn to_string(&self) -> string::String<'_>;
+}
+
+/// A wrapper around a string used to compare keys by exact content.
+#[derive(Debug, Clone)]
+pub struct Exact<'src>(string::String<'src>);
+
+impl Key for Exact<'_> {
+    fn equivalant(&self, key: string::String<'_>) -> bool {
+        key == self.0
+    }
+
+    fn to_string(&self) -> string::String<'_> {
+        self.0.borrowed()
+    }
+}
+
+impl<T: ToCodepoints> Key for T {
+    fn equivalant(&self, key: string::String<'_>) -> bool {
+        key.codepoint_eq(self)
+    }
+
+    fn to_string(&self) -> string::String<'_> {
+        todo!()
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Object<'src> {
@@ -10,9 +56,16 @@ pub struct Object<'src> {
 }
 
 impl<'src> Object<'src> {
-    pub fn borrowed(&self) -> Object<'_> {
+    /// Constructs a new empty `Object`.
+    pub const fn new() -> Self {
+        Self {
+            entries: CowSlice::Borrowed(&[]),
+        }
+    }
+
+    pub const fn borrowed(&self) -> Object<'_> {
         Object {
-            entries: CowSlice::Borrowed(&self.entries),
+            entries: CowSlice::Borrowed(self.entries.as_slice()),
         }
     }
 
@@ -28,8 +81,10 @@ impl<'src> Object<'src> {
         }
     }
 
-    pub fn has_key(&self, key: string::String<'_>) -> bool {
-        self.entries.iter().any(|(k, _)| *k == key)
+    pub fn has_key<K: Key>(&self, key: K) -> bool {
+        self.entries
+            .iter()
+            .any(|(k, _)| key.equivalant(k.borrowed()))
     }
 
     pub fn keys(&self) -> Keys<'_> {
@@ -38,27 +93,11 @@ impl<'src> Object<'src> {
         }
     }
 
-    pub fn key_values<'k>(&self, key: string::String<'k>) -> KeyValues<'_, 'k> {
+    pub fn key_values<K: Key>(&self, key: K) -> KeyValues<'_, K> {
         KeyValues {
             iter: self.entries.iter(),
             key,
         }
-    }
-
-    pub fn first(&self, key: string::String<'_>) -> Option<Value<'_>> {
-        self.key_values(key).next()
-    }
-
-    pub fn last(&self, key: string::String<'_>) -> Option<Value<'_>> {
-        self.key_values(key).next_back()
-    }
-
-    pub fn first_mut(&mut self, key: string::String<'_>) -> Option<&mut Value<'src>> {
-        Some(&mut self.entries.to_mut().iter_mut().find(|(k, _)| *k == key)?.1)
-    }
-
-    pub fn last_mut(&mut self, key: string::String<'_>) -> Option<&mut Value<'src>> {
-        Some(&mut self.entries.to_mut().iter_mut().rfind(|(k, _)| *k == key)?.1)
     }
 
     pub fn clear(&mut self) {
@@ -72,6 +111,13 @@ impl<'src> Object<'src> {
     pub fn remove_all(&mut self, key: string::String<'_>) {
         self.entries.to_mut().retain(|(k, _)| *k != key);
     }
+
+    pub fn entry<K: Key>(&mut self, key: K) -> Entry<'src, '_, K> {
+        Entry {
+            key,
+            entries: self.entries.to_mut(),
+        }
+    }
 }
 
 impl Display for Object<'_> {
@@ -84,6 +130,61 @@ impl Display for Object<'_> {
             }
         }
         f.write_char('}')
+    }
+}
+
+#[derive(Debug)]
+pub struct Entry<'src, 'a, K> {
+    key: K,
+    entries: &'a mut Vec<KV<'src>>,
+}
+
+impl<'src, K: Key> Entry<'src, '_, K> {
+    pub fn values_mut(&mut self) -> impl DoubleEndedIterator<Item = &mut Value<'src>> {
+        todo!() as std::iter::Once<_>
+    }
+
+    /// Adds the given value to the set of values associated with the key.
+    pub fn add(&mut self, value: Value<'src>) {
+        todo!()
+    }
+
+    /// Get the first value associated with the key.
+    pub fn first(&mut self) -> Option<&mut Value<'src>> {
+        self.values_mut().next()
+    }
+
+    /// Get the last value associated with the key.
+    pub fn last(&mut self) -> Option<&mut Value<'src>> {
+        self.values_mut().next_back()
+    }
+
+    /// Keep the first value for which the given predicate returns `true`, and remove
+    /// all others.
+    pub fn keep_first(&mut self, mut f: impl FnMut(&Value<'src>) -> bool) {
+        let mut found = false;
+        self.retain(|v| {
+            !found && {
+                found = f(v);
+                found
+            }
+        });
+    }
+
+    /// Remove all values associated with the key.
+    pub fn remove_all(&mut self) {
+        self.drain_all().for_each(drop);
+    }
+
+    /// Keep all values that satisfy the given predicate.
+    pub fn retain(&mut self, mut f: impl FnMut(&Value<'src>) -> bool) {
+        self.entries
+            .retain(|(k, v)| !self.key.equivalant(k.borrowed()) || f(v));
+    }
+
+    /// Produce an iterator that removes and returns all values associated with the key.
+    pub fn drain_all(&mut self) -> impl Iterator<Item = Value<'src>> {
+        todo!() as std::iter::Once<_>
     }
 }
 
@@ -117,35 +218,35 @@ impl DoubleEndedIterator for Keys<'_> {
 }
 
 #[derive(Debug, Clone)]
-pub struct KeyValues<'a, 'k> {
+pub struct KeyValues<'a, K> {
     iter: slice::Iter<'a, KV<'a>>,
-    key: string::String<'k>,
+    key: K,
 }
 
-impl<'a> Iterator for KeyValues<'a, '_> {
+impl<'a, K: Key> Iterator for KeyValues<'a, K> {
     type Item = Value<'a>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        loop {
-            let (key, value) = self.iter.next()?;
-            if *key == self.key {
-                break Some(value.borrowed());
-            }
-        }
+        Some(
+            self.iter
+                .find(|(k, _)| self.key.equivalant(k.borrowed()))?
+                .1
+                .borrowed(),
+        )
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
-        (0, Some(self.iter.len()))
+        self.iter.size_hint()
     }
 }
 
-impl DoubleEndedIterator for KeyValues<'_, '_> {
+impl<K: Key> DoubleEndedIterator for KeyValues<'_, K> {
     fn next_back(&mut self) -> Option<Self::Item> {
-        loop {
-            let (key, value) = self.iter.next_back()?;
-            if *key == self.key {
-                break Some(value.borrowed());
-            }
-        }
+        Some(
+            self.iter
+                .rfind(|(k, _)| self.key.equivalant(k.borrowed()))?
+                .1
+                .borrowed(),
+        )
     }
 }
