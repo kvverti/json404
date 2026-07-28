@@ -1,5 +1,9 @@
-use std::{borrow::Cow, fmt::{Debug, Display}, string::String as StdString};
 use crate::parse::{Expected, Reason, SyntaxError, try_parse};
+use std::{
+    borrow::Cow,
+    fmt::{Debug, Display},
+    string::String as StdString,
+};
 
 /// A Unicode codepoint. A `Codepoint` is like a `char`, except that surrogate
 /// codepoints are allowed.
@@ -61,7 +65,9 @@ impl From<char> for Codepoint {
 /// A trait for types which may be turned into a sequence of codepoints.
 pub trait ToCodepoints {
     /// The [`Iterator`] type returned by [`Self::into_codepoints`].
-    type CodepointIter<'a>: Iterator<Item = Codepoint> where Self: 'a;
+    type CodepointIter<'a>: Iterator<Item = Codepoint>
+    where
+        Self: 'a;
 
     /// Produce a sequence of codepoints.
     fn to_codepoints(&self) -> Self::CodepointIter<'_>;
@@ -71,26 +77,29 @@ pub trait ToCodepoints {
     /// borrowed by the implementing type.
     fn collect_to_string<'src>(&self) -> String<'src>
     where
-        Self: 'src
+        Self: 'src,
     {
         String::encode(self)
     }
 }
 
 impl<T: ToCodepoints> ToCodepoints for &T {
-    type CodepointIter<'a> = <T as ToCodepoints>::CodepointIter<'a> where Self: 'a;
+    type CodepointIter<'a>
+        = <T as ToCodepoints>::CodepointIter<'a>
+    where
+        Self: 'a;
 
     fn to_codepoints(&self) -> Self::CodepointIter<'_> {
         (*self).to_codepoints()
     }
-    
+
     fn collect_to_string<'src>(&self) -> String<'src>
     where
-        Self: 'src
+        Self: 'src,
     {
         (*self).collect_to_string()
     }
-} 
+}
 
 #[derive(Debug, Clone)]
 pub struct StrCodepoints<'a> {
@@ -124,15 +133,18 @@ impl ToCodepoints for str {
 }
 
 impl ToCodepoints for &str {
-    type CodepointIter<'a> = StrCodepoints<'a> where Self: 'a;
+    type CodepointIter<'a>
+        = StrCodepoints<'a>
+    where
+        Self: 'a;
 
     fn to_codepoints(&self) -> Self::CodepointIter<'_> {
         (*self).to_codepoints()
     }
-    
+
     fn collect_to_string<'src>(&self) -> String<'src>
     where
-        Self: 'src
+        Self: 'src,
     {
         String::encode_str(self)
     }
@@ -140,14 +152,17 @@ impl ToCodepoints for &str {
 
 impl ToCodepoints for [Codepoint] {
     type CodepointIter<'a> = std::iter::Copied<std::slice::Iter<'a, Codepoint>>;
-    
+
     fn to_codepoints(&self) -> Self::CodepointIter<'_> {
         self.into_iter().copied()
     }
 }
 
 impl ToCodepoints for &[Codepoint] {
-    type CodepointIter<'a> = std::iter::Copied<std::slice::Iter<'a, Codepoint>> where Self: 'a;
+    type CodepointIter<'a>
+        = std::iter::Copied<std::slice::Iter<'a, Codepoint>>
+    where
+        Self: 'a;
 
     fn to_codepoints(&self) -> Self::CodepointIter<'_> {
         (*self).to_codepoints()
@@ -156,7 +171,7 @@ impl ToCodepoints for &[Codepoint] {
 
 /// A JSON string. A string is a sequence of Unicode code points, which may contain unpaired surrogates due to
 /// Unicode escape sequences.
-/// 
+///
 /// # Comparison
 /// This library makes the choice to compare JSON strings literally, without normalizing Unicode escapes.
 /// For example, the following pairs of JSON strings are considered unequal.
@@ -175,25 +190,28 @@ impl<'src> String<'src> {
     }
 
     pub fn encode_str(contents: &'src str) -> Self {
-        if contents.bytes().any(|b| matches!(b, b'\x00'..=b'\x1F' | b'\\' | b'"')) {
+        if contents
+            .bytes()
+            .any(|b| matches!(b, b'\x00'..=b'\x1F' | b'\\' | b'"'))
+        {
             Self::encode(contents)
         } else {
             // the contents are all valid literal JSON string characters
             Self {
-                bytes: Cow::Borrowed(contents)
+                bytes: Cow::Borrowed(contents),
             }
         }
     }
 
     pub fn borrowed(&self) -> String<'_> {
         String {
-            bytes: Cow::Borrowed(&self.bytes)
+            bytes: Cow::Borrowed(&self.bytes),
         }
     }
 
     pub fn into_owned(self) -> String<'static> {
         String {
-            bytes: Cow::Owned(self.bytes.into_owned())
+            bytes: Cow::Owned(self.bytes.into_owned()),
         }
     }
 
@@ -207,7 +225,9 @@ impl<'src> String<'src> {
     /// - a simple escape sequence representing a control character.
     /// - a Unicode escape sequence representing a Unicode codepoint from `U+0` to `U+FFFF` (including unpaired surrogates).
     pub fn parts(&self) -> Parts<'_> {
-        Parts { src: self.bytes.chars() }
+        Parts {
+            src: self.bytes.chars(),
+        }
     }
 
     /// Produce an iterator over the codepoints represented in this JSON string. Surrogate pairs are treated
@@ -217,7 +237,9 @@ impl<'src> String<'src> {
     }
 
     pub fn chars(&self) -> Chars<'_> {
-        Chars { src: self.parts().peekable() }
+        Chars {
+            src: self.parts().peekable(),
+        }
     }
 
     /// Returns whether this string matches the given codepoint sequence.
@@ -241,7 +263,10 @@ impl Display for String<'_> {
 }
 
 impl<'src> ToCodepoints for String<'src> {
-    type CodepointIter<'a> = Codepoints<'a> where Self: 'a;
+    type CodepointIter<'a>
+        = Codepoints<'a>
+    where
+        Self: 'a;
 
     fn to_codepoints(&self) -> Self::CodepointIter<'_> {
         self.codepoints()
@@ -249,7 +274,7 @@ impl<'src> ToCodepoints for String<'src> {
 
     fn collect_to_string<'src1>(&self) -> String<'src1>
     where
-        Self: 'src1
+        Self: 'src1,
     {
         self.clone()
     }
@@ -273,42 +298,48 @@ impl Iterator for Parts<'_> {
             // end of string
             Some('"') => return None,
             // escape
-            Some('\\') =>
-                match self.src.next() {
-                    Some('u') => {
-                        let mut get_digits = || {
-                            let mut digit_fn = || {
-                                let found = self.src.next();
-                                match found.map(|c| c.try_into()) {
-                                    Some(Ok(c)) => Ok(c),
-                                    _ => Err(SyntaxError {
-                                        index: 0,
-                                        reason: Reason::String,
-                                        expected: &[Expected::UnicodeEscape],
-                                        actual: found,
-                                    }),
-                                }
-                            };
-                            Ok([
-                                digit_fn()?,
-                                digit_fn()?,
-                                digit_fn()?,
-                                digit_fn()?,
-                            ])
+            Some('\\') => match self.src.next() {
+                Some('u') => {
+                    let mut get_digits = || {
+                        let mut digit_fn = || {
+                            let found = self.src.next();
+                            match found.map(|c| c.try_into()) {
+                                Some(Ok(c)) => Ok(c),
+                                _ => Err(SyntaxError {
+                                    index: 0,
+                                    reason: Reason::String,
+                                    expected: &[Expected::UnicodeEscape],
+                                    actual: found,
+                                }),
+                            }
                         };
-                        let digits = match get_digits() {
-                            Ok(digits) => digits,
-                            Err(err) => return Some(Err(err)),
-                        };
-                        Some(Ok(StringPart::Escape(StringEscape::Unicode(UnicodeEscape(digits)))))
-                    },
-                    found => match found.map(|_c| todo!() as Result<_, ()>) {
-                        Some(Ok(escape)) => Some(Ok(StringPart::Escape(StringEscape::Short(escape)))),
-                        _ => Some(Err(SyntaxError { index: 0, reason: Reason::String, expected: &[Expected::Escape], actual: found })),
-                    }
+                        Ok([digit_fn()?, digit_fn()?, digit_fn()?, digit_fn()?])
+                    };
+                    let digits = match get_digits() {
+                        Ok(digits) => digits,
+                        Err(err) => return Some(Err(err)),
+                    };
+                    Some(Ok(StringPart::Escape(StringEscape::Unicode(
+                        UnicodeEscape(digits),
+                    ))))
+                }
+                found => match found.map(|_c| todo!() as Result<_, ()>) {
+                    Some(Ok(escape)) => Some(Ok(StringPart::Escape(StringEscape::Short(escape)))),
+                    _ => Some(Err(SyntaxError {
+                        index: 0,
+                        reason: Reason::String,
+                        expected: &[Expected::Escape],
+                        actual: found,
+                    })),
                 },
+            },
             // illegal control character or EOI
-            Some('\x00'..='\x1F') | None => Some(Err(SyntaxError { index: 0, reason: Reason::String, expected: &[Expected::String], actual: found })),
+            Some('\x00'..='\x1F') | None => Some(Err(SyntaxError {
+                index: 0,
+                reason: Reason::String,
+                expected: &[Expected::String],
+                actual: found,
+            })),
             // normal character
             Some(c) => Some(Ok(StringPart::Char(c))),
         }
@@ -327,7 +358,9 @@ impl Iterator for Codepoints<'_> {
         match part {
             StringPart::Char(c) => Some(c.into()),
             StringPart::Escape(StringEscape::Short(code)) => Some(Codepoint::from_bmp(code as u16)),
-            StringPart::Escape(StringEscape::Unicode(digits)) => Some(Codepoint::from_bmp(digits.to_codepoint())),
+            StringPart::Escape(StringEscape::Unicode(digits)) => {
+                Some(Codepoint::from_bmp(digits.to_codepoint()))
+            }
         }
     }
 }
@@ -343,21 +376,28 @@ impl Iterator for Chars<'_> {
         let part = try_parse!(self.src.next())?;
         match part {
             StringPart::Char(c) => Some(Ok(Ok(c))),
-            StringPart::Escape(StringEscape::Short(escape)) => Some(Ok(Ok(char::from(escape as u8)))),
+            StringPart::Escape(StringEscape::Short(escape)) => {
+                Some(Ok(Ok(char::from(escape as u8))))
+            }
             StringPart::Escape(StringEscape::Unicode(hi_digits)) => {
                 match hi_digits.to_codepoint() {
                     hi @ 0xD800..=0xDBFF => {
                         let next_part = try_parse!(self.src.peek().copied());
-                        if let Some(StringPart::Escape(StringEscape::Unicode(lo_digits))) = next_part && let lo @ 0xDC00..=0xDFFF = lo_digits.to_codepoint() {
+                        if let Some(StringPart::Escape(StringEscape::Unicode(lo_digits))) =
+                            next_part
+                            && let lo @ 0xDC00..=0xDFFF = lo_digits.to_codepoint()
+                        {
                             _ = self.src.next();
-                            let mut combined_codepoint = (u32::from(hi) & 0x3FF) << 10 | (u32::from(lo) & 0x3FF);
+                            let mut combined_codepoint =
+                                (u32::from(hi) & 0x3FF) << 10 | (u32::from(lo) & 0x3FF);
                             combined_codepoint += 0x10000;
-                            Some(Ok(Ok(char::from_u32(combined_codepoint).expect("Parsing a guaranteed valid code point"))))
+                            Some(Ok(Ok(char::from_u32(combined_codepoint)
+                                .expect("Parsing a guaranteed valid code point"))))
                         } else {
                             Some(Ok(Err(hi)))
                         }
-                    },
-                    codepoint => Some(Ok(char::from_u32(codepoint.into()).ok_or(codepoint)))
+                    }
+                    codepoint => Some(Ok(char::from_u32(codepoint.into()).ok_or(codepoint))),
                 }
             }
         }
@@ -370,7 +410,7 @@ pub enum StringPart {
     /// Any Unicode Scalar Value except for control characters, ", or \
     Char(char),
     /// An escape code.
-    Escape(StringEscape)
+    Escape(StringEscape),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -559,7 +599,7 @@ impl TryFrom<char> for HexDigit {
             'e' => Ok(HexDigit::MinusculeE),
             'F' => Ok(HexDigit::MajusculeF),
             'f' => Ok(HexDigit::MinusculeF),
-            _ => Err(ParseHexDigitError)
+            _ => Err(ParseHexDigitError),
         }
     }
 }
