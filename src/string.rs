@@ -63,9 +63,34 @@ pub trait ToCodepoints {
     /// The [`Iterator`] type returned by [`Self::into_codepoints`].
     type CodepointIter<'a>: Iterator<Item = Codepoint> where Self: 'a;
 
-    /// Produce a sequence of codepoints from the given value.
+    /// Produce a sequence of codepoints.
     fn to_codepoints(&self) -> Self::CodepointIter<'_>;
+
+    /// Produce a [`String`] containing the sequence of codepoints. This
+    /// is equivalent to [`String::encode`], but may be able to reuse storage
+    /// borrowed by the implementing type.
+    fn collect_to_string<'src>(&self) -> String<'src>
+    where
+        Self: 'src
+    {
+        String::encode(self)
+    }
 }
+
+impl<T: ToCodepoints> ToCodepoints for &T {
+    type CodepointIter<'a> = <T as ToCodepoints>::CodepointIter<'a> where Self: 'a;
+
+    fn to_codepoints(&self) -> Self::CodepointIter<'_> {
+        (*self).to_codepoints()
+    }
+    
+    fn collect_to_string<'src>(&self) -> String<'src>
+    where
+        Self: 'src
+    {
+        (*self).collect_to_string()
+    }
+} 
 
 #[derive(Debug, Clone)]
 pub struct StrCodepoints<'a> {
@@ -98,11 +123,34 @@ impl ToCodepoints for str {
     }
 }
 
+impl ToCodepoints for &str {
+    type CodepointIter<'a> = StrCodepoints<'a> where Self: 'a;
+
+    fn to_codepoints(&self) -> Self::CodepointIter<'_> {
+        (*self).to_codepoints()
+    }
+    
+    fn collect_to_string<'src>(&self) -> String<'src>
+    where
+        Self: 'src
+    {
+        String::encode_str(self)
+    }
+}
+
 impl ToCodepoints for [Codepoint] {
     type CodepointIter<'a> = std::iter::Copied<std::slice::Iter<'a, Codepoint>>;
     
     fn to_codepoints(&self) -> Self::CodepointIter<'_> {
         self.into_iter().copied()
+    }
+}
+
+impl ToCodepoints for &[Codepoint] {
+    type CodepointIter<'a> = std::iter::Copied<std::slice::Iter<'a, Codepoint>> where Self: 'a;
+
+    fn to_codepoints(&self) -> Self::CodepointIter<'_> {
+        (*self).to_codepoints()
     }
 }
 
@@ -122,6 +170,21 @@ pub struct String<'src> {
 }
 
 impl<'src> String<'src> {
+    pub fn encode<I: ?Sized + ToCodepoints>(codepoints: &I) -> Self {
+        todo!()
+    }
+
+    pub fn encode_str(contents: &'src str) -> Self {
+        if contents.bytes().any(|b| matches!(b, b'\x00'..=b'\x1F' | b'\\' | b'"')) {
+            Self::encode(contents)
+        } else {
+            // the contents are all valid literal JSON string characters
+            Self {
+                bytes: Cow::Borrowed(contents)
+            }
+        }
+    }
+
     pub fn borrowed(&self) -> String<'_> {
         String {
             bytes: Cow::Borrowed(&self.bytes)
@@ -158,7 +221,7 @@ impl<'src> String<'src> {
     }
 
     /// Returns whether this string matches the given codepoint sequence.
-    pub fn codepoint_eq<I: ToCodepoints>(&self, other: &I) -> bool {
+    pub fn codepoint_eq<I: ?Sized + ToCodepoints>(&self, other: &I) -> bool {
         let mut these_codepoints = self.codepoints();
         let mut those_codepoints = other.to_codepoints();
         loop {
@@ -182,6 +245,13 @@ impl<'src> ToCodepoints for String<'src> {
 
     fn to_codepoints(&self) -> Self::CodepointIter<'_> {
         self.codepoints()
+    }
+
+    fn collect_to_string<'src1>(&self) -> String<'src1>
+    where
+        Self: 'src1
+    {
+        self.clone()
     }
 }
 
@@ -230,9 +300,9 @@ impl Iterator for Parts<'_> {
                             Ok(digits) => digits,
                             Err(err) => return Some(Err(err)),
                         };
-                        Some(Ok(StringPart::Escape(StringEscape::Unicode(HexDigits(digits)))))
+                        Some(Ok(StringPart::Escape(StringEscape::Unicode(UnicodeEscape(digits)))))
                     },
-                    found => match found.map(|c| c.try_into()) {
+                    found => match found.map(|_c| todo!() as Result<_, ()>) {
                         Some(Ok(escape)) => Some(Ok(StringPart::Escape(StringEscape::Short(escape)))),
                         _ => Some(Err(SyntaxError { index: 0, reason: Reason::String, expected: &[Expected::Escape], actual: found })),
                     }
@@ -305,48 +375,80 @@ pub enum StringPart {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StringEscape {
-    Short(ShortEscape),
-    Unicode(HexDigits),
+    Short(SimpleEscape),
+    Unicode(UnicodeEscape),
 }
 
+/// A simple escape sequence representing a selected ASCII control code.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
-pub enum ShortEscape {
+pub enum SimpleEscape {
     Quotation = b'"',
     ReverseSolidus = b'\\',
     Solidus = b'/',
-    Backspace = b'\x08',
-    FormFeed = b'\x0C',
-    LineFeed = b'\n',
-    CarriageReturn = b'\r',
-    Tabulation = b'\t',
+    Backspace = b'b',
+    FormFeed = b'f',
+    LineFeed = b'n',
+    CarriageReturn = b'r',
+    Tabulation = b't',
 }
 
-#[derive(Debug)]
-pub struct ParseEscapeError;
+impl SimpleEscape {
+    /// Encodes a `char` into a simple escape.
+    pub const fn encode(c: char) -> Option<SimpleEscape> {
+        match c {
+            '"' => Some(Self::Quotation),
+            '\\' => Some(Self::ReverseSolidus),
+            '/' => Some(Self::Solidus),
+            '\x08' => Some(Self::Backspace),
+            '\x0C' => Some(Self::FormFeed),
+            '\n' => Some(Self::LineFeed),
+            '\r' => Some(Self::CarriageReturn),
+            '\t' => Some(Self::Tabulation),
+            _ => None,
+        }
+    }
 
-impl TryFrom<char> for ShortEscape {
-    type Error = ParseEscapeError;
+    /// Decodes this escape code into the corresponding ASCII control code.
+    pub const fn decode(self) -> char {
+        match self {
+            Self::Quotation => '"',
+            Self::ReverseSolidus => '\\',
+            Self::Solidus => '/',
+            Self::Backspace => '\x08',
+            Self::FormFeed => '\x0C',
+            Self::LineFeed => '\n',
+            Self::CarriageReturn => '\r',
+            Self::Tabulation => '\t',
+        }
+    }
 
-    fn try_from(value: char) -> Result<Self, Self::Error> {
-        match value {
-            '"' => Ok(Self::Quotation),
-            '\\' => Ok(Self::ReverseSolidus),
-            '/' => Ok(Self::Solidus),
-            'b' => Ok(Self::Backspace),
-            'f' => Ok(Self::FormFeed),
-            'n' => Ok(Self::LineFeed),
-            'r' => Ok(Self::CarriageReturn),
-            't' => Ok(Self::Tabulation),
-            _ => Err(ParseEscapeError),
+    /// The JSON escape sequence that corresponds to this escape code.
+    pub const fn escape_sequence(self) -> &'static str {
+        match self {
+            Self::Quotation => r#"\""#,
+            Self::ReverseSolidus => r"\\",
+            Self::Solidus => r"\/",
+            Self::Backspace => r"\b",
+            Self::FormFeed => r"\f",
+            Self::LineFeed => r"\n",
+            Self::CarriageReturn => r"\r",
+            Self::Tabulation => r"\t",
         }
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct HexDigits(pub [HexDigit; 4]);
+impl Display for SimpleEscape {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.escape_sequence())
+    }
+}
 
-impl HexDigits {
+/// A Unicode escape sequence, represented by four hexadecimal digits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct UnicodeEscape(pub [HexDigit; 4]);
+
+impl UnicodeEscape {
     pub fn to_codepoint(self) -> u16 {
         let nybbles = self.0.map(|digit| u8::from(digit.value()));
         let bytes = [nybbles[0] << 4 | nybbles[1], nybbles[2] << 4 | nybbles[3]];
@@ -380,6 +482,12 @@ pub enum HexDigit {
     Three = b'3',
     Two = b'2',
     Zero = b'0',
+}
+
+impl HexDigit {
+    pub fn as_char(self) -> char {
+        char::from(self as u8)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]

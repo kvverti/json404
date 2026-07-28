@@ -14,7 +14,7 @@ mod sealed {
     pub trait Sealed {}
 
     impl Sealed for super::Exact<'_> {}
-    impl<T: super::ToCodepoints> Sealed for T {}
+    impl<T: ?Sized + super::ToCodepoints> Sealed for T {}
 }
 
 /// A trait that abstracts the notion of comparing object keys.
@@ -22,11 +22,13 @@ pub trait Key: sealed::Sealed {
     /// Whether this key is equivalent to the given string.
     fn equivalant(&self, key: string::String<'_>) -> bool;
 
-    /// Produce a string equivalent to this key.
-    fn to_string(&self) -> string::String<'_>;
+    fn to_string<'src>(&self) -> string::String<'src>
+    where
+        Self: 'src;
 }
 
 /// A wrapper around a string used to compare keys by exact content.
+// todo: design an API
 #[derive(Debug, Clone)]
 pub struct Exact<'src>(string::String<'src>);
 
@@ -35,18 +37,24 @@ impl Key for Exact<'_> {
         key == self.0
     }
 
-    fn to_string(&self) -> string::String<'_> {
-        self.0.borrowed()
+    fn to_string<'src>(&self) -> string::String<'src>
+    where
+        Self: 'src,
+    {
+        self.0.clone()
     }
 }
 
-impl<T: ToCodepoints> Key for T {
+impl<T: ?Sized + ToCodepoints> Key for T {
     fn equivalant(&self, key: string::String<'_>) -> bool {
         key.codepoint_eq(self)
     }
 
-    fn to_string(&self) -> string::String<'_> {
-        todo!()
+    fn to_string<'src>(&self) -> string::String<'src>
+    where
+        Self: 'src,
+    {
+        self.collect_to_string()
     }
 }
 
@@ -112,8 +120,9 @@ impl<'src> Object<'src> {
         self.entries.to_mut().retain(|(k, _)| *k != key);
     }
 
-    pub fn entry<K: Key>(&mut self, key: K) -> Entry<'src, '_, K> {
-        Entry {
+    /// Obtain mutable access to the set of entries associated with the given key.
+    pub fn entries<K: 'src + Key>(&mut self, key: K) -> Entries<'src, '_, K> {
+        Entries {
             key,
             entries: self.entries.to_mut(),
         }
@@ -134,19 +143,20 @@ impl Display for Object<'_> {
 }
 
 #[derive(Debug)]
-pub struct Entry<'src, 'a, K> {
+pub struct Entries<'src, 'a, K: 'src> {
     key: K,
     entries: &'a mut Vec<KV<'src>>,
 }
 
-impl<'src, K: Key> Entry<'src, '_, K> {
+impl<'src, K: Key> Entries<'src, '_, K> {
     pub fn values_mut(&mut self) -> impl DoubleEndedIterator<Item = &mut Value<'src>> {
         todo!() as std::iter::Once<_>
     }
 
     /// Adds the given value to the set of values associated with the key.
     pub fn add(&mut self, value: Value<'src>) {
-        todo!()
+        let k = self.key.to_string();
+        self.entries.push((k, value));
     }
 
     /// Get the first value associated with the key.
