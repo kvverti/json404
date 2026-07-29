@@ -4,10 +4,11 @@ use std::{
 };
 
 use crate::{
-    string::{self, ToCodepoints},
     CowSlice, Value,
+    string::{self, ToCodepoints},
 };
 
+/// The entry type for JSON objects.
 type KV<'src> = (string::String<'src>, Value<'src>);
 
 mod sealed {
@@ -22,15 +23,15 @@ pub trait Key: sealed::Sealed {
     /// Whether this key is equivalent to the given string.
     fn equivalant(&self, key: string::String<'_>) -> bool;
 
+    /// Creates a string equivalent to this key.
     fn to_string<'src>(&self) -> string::String<'src>
     where
         Self: 'src;
 }
 
 /// A wrapper around a string used to compare keys by exact content.
-// todo: design an API
 #[derive(Debug, Clone)]
-pub struct Exact<'src>(string::String<'src>);
+pub struct Exact<'src>(pub string::String<'src>);
 
 impl Key for Exact<'_> {
     fn equivalant(&self, key: string::String<'_>) -> bool {
@@ -58,6 +59,8 @@ impl<T: ?Sized + ToCodepoints> Key for T {
     }
 }
 
+/// A JSON object, composed of a sequence of key-value pairs. Each pair has a string key
+/// and a JSON value.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Object<'src> {
     entries: CowSlice<'src, KV<'src>>,
@@ -89,6 +92,7 @@ impl<'src> Object<'src> {
         }
     }
 
+    /// Whether this object contains a key that matches the given key.
     pub fn has_key<K: Key>(&self, key: K) -> bool {
         self.entries
             .iter()
@@ -101,7 +105,20 @@ impl<'src> Object<'src> {
         }
     }
 
-    pub fn key_values<K: Key>(&self, key: K) -> KeyValues<'_, K> {
+    /// Produces an iterator over all values in this object.
+    pub fn values(&self) -> impl Iterator<Item = Value<'_>> {
+        todo!() as std::iter::Once<_>
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = KV<'_>> {
+        todo!() as std::iter::Once<_>
+    }
+
+    pub fn get<K: Key>(&self, key: K) -> impl Iterator<Item = Value<'_>> {
+        todo!() as std::iter::Once<_>
+    }
+
+    pub fn get_with_keys<K: Key>(&self, key: K) -> KeyValues<'_, K> {
         KeyValues {
             iter: self.entries.iter(),
             key,
@@ -118,6 +135,10 @@ impl<'src> Object<'src> {
 
     pub fn remove_all(&mut self, key: string::String<'_>) {
         self.entries.to_mut().retain(|(k, _)| *k != key);
+    }
+
+    pub fn drain(&mut self) -> impl Iterator<Item = KV<'src>> {
+        todo!() as std::iter::Once<_>
     }
 
     /// Obtain mutable access to the set of entries associated with the given key.
@@ -193,7 +214,7 @@ impl<'src, K: Key> Entries<'src, '_, K> {
     }
 
     /// Produce an iterator that removes and returns all values associated with the key.
-    pub fn drain_all(&mut self) -> impl Iterator<Item = Value<'src>> {
+    pub fn drain(&mut self) -> impl Iterator<Item = Value<'src>> {
         todo!() as std::iter::Once<_>
     }
 }
@@ -234,15 +255,11 @@ pub struct KeyValues<'a, K> {
 }
 
 impl<'a, K: Key> Iterator for KeyValues<'a, K> {
-    type Item = Value<'a>;
+    type Item = KV<'a>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        Some(
-            self.iter
-                .find(|(k, _)| self.key.equivalant(k.borrowed()))?
-                .1
-                .borrowed(),
-        )
+        let (k, v) = self.iter.find(|(k, _)| self.key.equivalant(k.borrowed()))?;
+        Some((k.borrowed(), v.borrowed()))
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
@@ -252,11 +269,9 @@ impl<'a, K: Key> Iterator for KeyValues<'a, K> {
 
 impl<K: Key> DoubleEndedIterator for KeyValues<'_, K> {
     fn next_back(&mut self) -> Option<Self::Item> {
-        Some(
-            self.iter
-                .rfind(|(k, _)| self.key.equivalant(k.borrowed()))?
-                .1
-                .borrowed(),
-        )
+        let (k, v) = self
+            .iter
+            .rfind(|(k, _)| self.key.equivalant(k.borrowed()))?;
+        Some((k.borrowed(), v.borrowed()))
     }
 }
