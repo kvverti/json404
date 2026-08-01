@@ -1,9 +1,11 @@
-use crate::parse::{Expected, Reason, SyntaxError, try_parse};
+use crate::parse::{Parser, SyntaxError, try_parse};
 use std::{
     borrow::Cow,
     fmt::{Debug, Display},
     string::String as StdString,
 };
+
+mod parse;
 
 /// A Unicode codepoint. A `Codepoint` is like a `char`, except that surrogate
 /// codepoints are allowed.
@@ -293,6 +295,16 @@ impl<'src> FromIterator<Codepoint> for String<'src> {
     }
 }
 
+#[doc(hidden)]
+pub const fn parse(src: &str) -> Result<String<'_>, SyntaxError> {
+    match Parser::new(src).string() {
+        Ok(content) => Ok(String {
+            bytes: Cow::Borrowed(content),
+        }),
+        Err(e) => Err(e),
+    }
+}
+
 pub struct StringValueError {
     pub prefix: StdString,
     pub codepoint: u16,
@@ -306,56 +318,7 @@ impl Iterator for Parts<'_> {
     type Item = Result<StringPart, SyntaxError>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let found = self.src.next();
-        match found {
-            // end of string
-            Some('"') => return None,
-            // escape
-            Some('\\') => match self.src.next() {
-                Some('u') => {
-                    let mut get_digits = || {
-                        let mut digit_fn = || {
-                            let found = self.src.next();
-                            match found.map(|c| c.try_into()) {
-                                Some(Ok(c)) => Ok(c),
-                                _ => Err(SyntaxError {
-                                    index: 0,
-                                    reason: Reason::String,
-                                    expected: &[Expected::UnicodeEscape],
-                                    actual: found,
-                                }),
-                            }
-                        };
-                        Ok([digit_fn()?, digit_fn()?, digit_fn()?, digit_fn()?])
-                    };
-                    let digits = match get_digits() {
-                        Ok(digits) => digits,
-                        Err(err) => return Some(Err(err)),
-                    };
-                    Some(Ok(StringPart::Escape(StringEscape::Unicode(
-                        UnicodeEscape(digits),
-                    ))))
-                }
-                found => match found.map(|_c| todo!() as Result<_, ()>) {
-                    Some(Ok(escape)) => Some(Ok(StringPart::Escape(StringEscape::Short(escape)))),
-                    _ => Some(Err(SyntaxError {
-                        index: 0,
-                        reason: Reason::String,
-                        expected: &[Expected::Escape],
-                        actual: found,
-                    })),
-                },
-            },
-            // illegal control character or EOI
-            Some('\x00'..='\x1F') | None => Some(Err(SyntaxError {
-                index: 0,
-                reason: Reason::String,
-                expected: &[Expected::String],
-                actual: found,
-            })),
-            // normal character
-            Some(c) => Some(Ok(StringPart::Char(c))),
-        }
+        todo!()
     }
 }
 
