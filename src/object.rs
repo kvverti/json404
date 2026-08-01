@@ -204,7 +204,7 @@ impl<'src, K: Key> Entries<'src, '_, K> {
 
     /// Remove all values associated with the key.
     pub fn remove_all(&mut self) {
-        self.drain_all().for_each(drop);
+        self.drain().for_each(drop);
     }
 
     /// Keep all values that satisfy the given predicate.

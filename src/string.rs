@@ -22,6 +22,11 @@ impl Codepoint {
         }
     }
 
+    /// Returns the Unicode codepoint index of this codepoint.
+    pub const fn index(self) -> u32 {
+        self.0
+    }
+
     /// Constructs the `Codepoint` corresponding to the given `char`.
     pub const fn from_char(c: char) -> Self {
         Self(c as u32)
@@ -72,14 +77,15 @@ pub trait ToCodepoints {
     /// Produce a sequence of codepoints.
     fn to_codepoints(&self) -> Self::CodepointIter<'_>;
 
-    /// Produce a [`String`] containing the sequence of codepoints. This
-    /// is equivalent to [`String::encode`], but may be able to reuse storage
-    /// borrowed by the implementing type.
+    /// Produce a [`String`] containing the sequence of codepoints. It should produce
+    /// the same result as `self.to_codepoints().collect()`, but may be able to reuse
+    /// memory. You should generally call [`String::encode`] instead of directly
+    /// invoking this method.
     fn collect_to_string<'src>(&self) -> String<'src>
     where
         Self: 'src,
     {
-        String::encode(self)
+        self.to_codepoints().collect()
     }
 }
 
@@ -146,7 +152,17 @@ impl ToCodepoints for &str {
     where
         Self: 'src,
     {
-        String::encode_str(self)
+        if self
+            .bytes()
+            .any(|b| matches!(b, b'\x00'..=b'\x1F' | b'\\' | b'"'))
+        {
+            (*self).collect_to_string()
+        } else {
+            // the contents are all valid literal JSON string characters
+            String {
+                bytes: Cow::Borrowed(self),
+            }
+        }
     }
 }
 
@@ -180,27 +196,15 @@ impl ToCodepoints for &[Codepoint] {
 /// - `"\n"` and `"\u000A` (Unicode escapes and simple escapes are not normalized)
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct String<'src> {
-    /// The underlying data.
+    /// The underlying data, not including the delimiting quotes.
     bytes: Cow<'src, str>,
 }
 
 impl<'src> String<'src> {
-    pub fn encode<I: ?Sized + ToCodepoints>(codepoints: &I) -> Self {
-        todo!()
-    }
-
-    pub fn encode_str(contents: &'src str) -> Self {
-        if contents
-            .bytes()
-            .any(|b| matches!(b, b'\x00'..=b'\x1F' | b'\\' | b'"'))
-        {
-            Self::encode(contents)
-        } else {
-            // the contents are all valid literal JSON string characters
-            Self {
-                bytes: Cow::Borrowed(contents),
-            }
-        }
+    /// Creates a `String` containing the given codepoint sequence. Use this function to create
+    /// a `String` from a string literal or slice.
+    pub fn encode<I: 'src + ToCodepoints>(codepoints: I) -> Self {
+        codepoints.collect_to_string()
     }
 
     pub fn borrowed(&self) -> String<'_> {
@@ -215,7 +219,11 @@ impl<'src> String<'src> {
         }
     }
 
-    /// The underlying JSON string data. Escape sequences are not decoded.
+    pub fn decode(&self) -> Cow<'_, str> {
+        todo!()
+    }
+
+    /// The underlying JSON string data, without the delimiting quotes. Escape sequences are not decoded.
     pub fn source(&self) -> &str {
         &self.bytes
     }
@@ -277,6 +285,29 @@ impl<'src> ToCodepoints for String<'src> {
         Self: 'src1,
     {
         self.clone()
+    }
+}
+
+impl<'src> FromIterator<Codepoint> for String<'src> {
+    fn from_iter<T: IntoIterator<Item = Codepoint>>(iter: T) -> Self {
+        let mut contents = StdString::new();
+        for codepoint in iter {
+            if let Some(c) = codepoint.to_char()
+                && c != '/'
+                && let Some(esc) = SimpleEscape::encode(c)
+            {
+                contents.push_str(esc.escape_sequence());
+            } else if let Some(c @ '\u{20}'..) = codepoint.to_char() {
+                contents.push(c);
+            } else {
+                use std::fmt::Write as _;
+                assert!(codepoint.index() <= 0xFFFF);
+                write!(contents, r"\u{:04X}", codepoint.index()).expect("formatting to string must not fail");
+            }
+        }
+        Self {
+            bytes: Cow::Owned(contents),
+        }
     }
 }
 
