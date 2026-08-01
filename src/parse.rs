@@ -69,14 +69,3 @@ impl<'src> Parser<'src> {
         }
     }
 }
-
-macro_rules! try_parse {
-    ($res:expr) => {
-        match $res {
-            Some(Ok(v)) => Some(v),
-            Some(Err(e)) => return Some(Err(e)),
-            None => None,
-        }
-    };
-}
-pub(crate) use try_parse;

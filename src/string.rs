@@ -1,7 +1,11 @@
-use crate::{borrow::as_str, parse::{Parser, try_parse}};
+use crate::{
+    borrow::as_str,
+    parse::Parser,
+};
 use std::{
     borrow::Cow,
     fmt::{Debug, Display},
+    mem,
     string::String as StdString,
 };
 
@@ -190,6 +194,8 @@ impl<'src> String<'src> {
         codepoints.collect_to_string()
     }
 
+    /// Produce a string that borrows from this string. It is generally better
+    /// to store a borrowed string than a reference to a string.
     pub const fn borrowed(&self) -> String<'_> {
         String {
             bytes: Cow::Borrowed(as_str(&self.bytes)),
@@ -200,10 +206,6 @@ impl<'src> String<'src> {
         String {
             bytes: Cow::Owned(self.bytes.into_owned()),
         }
-    }
-
-    pub fn decode(&self) -> Cow<'_, str> {
-        todo!()
     }
 
     /// The underlying JSON string data, without the delimiting quotes. Escape sequences are not decoded.
@@ -227,6 +229,8 @@ impl<'src> String<'src> {
         Codepoints { src: self.parts() }
     }
 
+    /// Produce an iterator over the characters represented in this JSON string. Surrogate pairs are decoded
+    /// into a single char. Lone surrogates are returned as errors.
     pub fn chars(&self) -> Chars<'_> {
         Chars {
             src: self.parts().peekable(),
@@ -295,6 +299,28 @@ impl<'src> FromIterator<Codepoint> for String<'src> {
     }
 }
 
+impl<'src> FromIterator<Part> for String<'src> {
+    fn from_iter<T: IntoIterator<Item = Part>>(iter: T) -> Self {
+        let mut contents = StdString::new();
+        for part in iter {
+            match part {
+                Part::Char(c) => contents.push(c),
+                Part::SimpleEscape(escape) => contents.push_str(escape.escape_sequence()),
+                Part::UnicodeEscape(escape) => {
+                    contents.push_str(r"\u");
+                    for digit in escape.0 {
+                        contents.push(digit.as_char());
+                    }
+                }
+            }
+        }
+        Self {
+            bytes: Cow::Owned(contents),
+        }
+    }
+}
+
+/// Parses a string from JSON string data.
 #[doc(hidden)]
 pub const fn parse(src: &str) -> crate::Result<String<'_>> {
     match Parser::new(src).string() {
@@ -315,10 +341,36 @@ pub struct Parts<'src> {
 }
 
 impl Iterator for Parts<'_> {
-    type Item = crate::Result<StringPart>;
+    type Item = Part;
 
     fn next(&mut self) -> Option<Self::Item> {
-        todo!()
+        match self.src.next()? {
+            '\\' => match self
+                .src
+                .next()
+                .expect("string must not have a partial escape sequence")
+            {
+                'u' => {
+                    macro_rules! four {
+                        ($x:expr) => {
+                            [$x, $x, $x, $x]
+                        };
+                    }
+                    let digits = four![
+                        self.src
+                            .next()
+                            .and_then(HexDigit::from_char)
+                            .expect("string must have valid Unicode escape")
+                    ];
+                    Some(Part::UnicodeEscape(UnicodeEscape(digits)))
+                }
+                c => Some(Part::SimpleEscape(
+                    SimpleEscape::from_code(c)
+                        .expect("string must have valid simple escape sequence"),
+                )),
+            },
+            c => Some(Part::Char(c)),
+        }
     }
 }
 
@@ -330,13 +382,10 @@ impl Iterator for Codepoints<'_> {
     type Item = Codepoint;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let part = self.src.next()?.expect("JSON string should be valid");
-        match part {
-            StringPart::Char(c) => Some(c.into()),
-            StringPart::Escape(StringEscape::Short(code)) => Some(Codepoint::from_bmp(code as u16)),
-            StringPart::Escape(StringEscape::Unicode(digits)) => {
-                Some(Codepoint::from_bmp(digits.to_codepoint()))
-            }
+        match self.src.next()? {
+            Part::Char(c) => Some(c.into()),
+            Part::SimpleEscape(escape) => Some(Codepoint::from_char(escape.decode())),
+            Part::UnicodeEscape(escape) => Some(Codepoint::from_bmp(escape.to_codepoint())),
         }
     }
 }
@@ -346,53 +395,45 @@ pub struct Chars<'src> {
 }
 
 impl Iterator for Chars<'_> {
-    type Item = crate::Result<Result<char, u16>>;
+    type Item = Result<char, u16>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let part = try_parse!(self.src.next())?;
-        match part {
-            StringPart::Char(c) => Some(Ok(Ok(c))),
-            StringPart::Escape(StringEscape::Short(escape)) => {
-                Some(Ok(Ok(char::from(escape as u8))))
-            }
-            StringPart::Escape(StringEscape::Unicode(hi_digits)) => {
-                match hi_digits.to_codepoint() {
-                    hi @ 0xD800..=0xDBFF => {
-                        let next_part = try_parse!(self.src.peek().copied());
-                        if let Some(StringPart::Escape(StringEscape::Unicode(lo_digits))) =
-                            next_part
-                            && let lo @ 0xDC00..=0xDFFF = lo_digits.to_codepoint()
-                        {
-                            _ = self.src.next();
-                            let mut combined_codepoint =
-                                (u32::from(hi) & 0x3FF) << 10 | (u32::from(lo) & 0x3FF);
-                            combined_codepoint += 0x10000;
-                            Some(Ok(Ok(char::from_u32(combined_codepoint)
-                                .expect("Parsing a guaranteed valid code point"))))
-                        } else {
-                            Some(Ok(Err(hi)))
-                        }
+        match self.src.next()? {
+            Part::Char(c) => Some(Ok(c)),
+            Part::SimpleEscape(escape) => Some(Ok(escape.decode())),
+            Part::UnicodeEscape(hi_digits) => match hi_digits.to_codepoint() {
+                // high surrogate
+                hi @ 0xD800..=0xDBFF => {
+                    let next_part = self.src.peek().copied();
+                    if let Some(Part::UnicodeEscape(lo_digits)) = next_part
+                        && let lo @ 0xDC00..=0xDFFF = lo_digits.to_codepoint()
+                    {
+                        _ = self.src.next();
+                        let mut combined_codepoint =
+                            (u32::from(hi) & 0x3FF) << 10 | (u32::from(lo) & 0x3FF);
+                        combined_codepoint += 0x10000;
+                        Some(Ok(char::from_u32(combined_codepoint)
+                            .expect("parsing a guaranteed valid code point")))
+                    } else {
+                        Some(Err(hi))
                     }
-                    codepoint => Some(Ok(char::from_u32(codepoint.into()).ok_or(codepoint))),
                 }
-            }
+                // USV or low surrogate
+                codepoint => Some(char::from_u32(codepoint.into()).ok_or(codepoint)),
+            },
         }
     }
 }
 
 /// A single component of a JSON string.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum StringPart {
+pub enum Part {
     /// Any Unicode Scalar Value except for control characters, ", or \
     Char(char),
-    /// An escape code.
-    Escape(StringEscape),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum StringEscape {
-    Short(SimpleEscape),
-    Unicode(UnicodeEscape),
+    /// A simple escape sequence.
+    SimpleEscape(SimpleEscape),
+    /// A Unicode escape sequence.
+    UnicodeEscape(UnicodeEscape),
 }
 
 /// A simple escape sequence representing a selected ASCII control code.
@@ -425,7 +466,7 @@ impl SimpleEscape {
         }
     }
 
-    /// Decodes this escape code into the corresponding ASCII control code.
+    /// Decodes this escape code into the corresponding ASCII character.
     pub const fn decode(self) -> char {
         match self {
             Self::Quotation => '"',
@@ -436,6 +477,21 @@ impl SimpleEscape {
             Self::LineFeed => '\n',
             Self::CarriageReturn => '\r',
             Self::Tabulation => '\t',
+        }
+    }
+
+    /// Returns the escape corresponding to the given code character.
+    pub const fn from_code(code: char) -> Option<Self> {
+        match code {
+            '"' => Some(Self::Quotation),
+            '\\' => Some(Self::ReverseSolidus),
+            '/' => Some(Self::Solidus),
+            'b' => Some(Self::Backspace),
+            'f' => Some(Self::FormFeed),
+            'n' => Some(Self::LineFeed),
+            'r' => Some(Self::CarriageReturn),
+            't' => Some(Self::Tabulation),
+            _ => None,
         }
     }
 
@@ -501,6 +557,16 @@ pub enum HexDigit {
 }
 
 impl HexDigit {
+    pub const fn from_char(c: char) -> Option<Self> {
+        match c {
+            '0'..='9' | 'A'..='F' | 'a'..='f' => {
+                // SAFETY: these are exactly the allowed values of HexDigit
+                unsafe { Some(mem::transmute::<u8, Self>(c as u8)) }
+            }
+            _ => None,
+        }
+    }
+
     pub fn as_char(self) -> char {
         char::from(self as u8)
     }
@@ -552,31 +618,7 @@ impl TryFrom<char> for HexDigit {
     type Error = ParseHexDigitError;
 
     fn try_from(value: char) -> Result<Self, Self::Error> {
-        match value {
-            '0' => Ok(HexDigit::Zero),
-            '1' => Ok(HexDigit::One),
-            '2' => Ok(HexDigit::Two),
-            '3' => Ok(HexDigit::Three),
-            '4' => Ok(HexDigit::Four),
-            '5' => Ok(HexDigit::Five),
-            '6' => Ok(HexDigit::Six),
-            '7' => Ok(HexDigit::Seven),
-            '8' => Ok(HexDigit::Eight),
-            '9' => Ok(HexDigit::Nine),
-            'A' => Ok(HexDigit::MajusculeA),
-            'a' => Ok(HexDigit::MinusculeA),
-            'B' => Ok(HexDigit::MajusculeB),
-            'b' => Ok(HexDigit::MinusculeB),
-            'C' => Ok(HexDigit::MajusculeC),
-            'c' => Ok(HexDigit::MinusculeC),
-            'D' => Ok(HexDigit::MajusculeD),
-            'd' => Ok(HexDigit::MinusculeD),
-            'E' => Ok(HexDigit::MajusculeE),
-            'e' => Ok(HexDigit::MinusculeE),
-            'F' => Ok(HexDigit::MajusculeF),
-            'f' => Ok(HexDigit::MinusculeF),
-            _ => Err(ParseHexDigitError),
-        }
+        Self::from_char(value).ok_or(ParseHexDigitError)
     }
 }
 
