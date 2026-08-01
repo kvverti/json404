@@ -4,7 +4,8 @@ use std::{
 };
 
 use crate::{
-    CowSlice, Value,
+    Value,
+    borrow::CowSlice,
     string::{self, ToCodepoints},
 };
 

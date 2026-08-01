@@ -1,6 +1,10 @@
-use std::{borrow::Borrow, fmt::{Debug, Display, Write}, ops::Deref};
+use std::{
+    borrow::Borrow,
+    fmt::{Debug, Display, Write},
+    ops::Deref,
+};
 
-use crate::{CowSlice, Value};
+use crate::{Value, borrow::CowSlice};
 
 /// A JSON array, composed of a sequence of JSON values. This type dereferences
 /// to a slice of values, and can be easily converted to and from a slice or `Vec`.
@@ -22,7 +26,7 @@ impl<'src> Array<'src> {
     /// as the backing storage for this array.
     pub const fn from_slice(values: &'src [Value<'src>]) -> Self {
         Self {
-            elements: CowSlice::Borrowed(values)
+            elements: CowSlice::Borrowed(values),
         }
     }
 
@@ -100,7 +104,7 @@ impl<'src> From<&'src [Value<'src>]> for Array<'src> {
 impl<'src> From<Vec<Value<'src>>> for Array<'src> {
     fn from(value: Vec<Value<'src>>) -> Self {
         Self {
-            elements: CowSlice::Owned(value)
+            elements: CowSlice::Owned(value),
         }
     }
 }

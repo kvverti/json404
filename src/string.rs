@@ -1,4 +1,4 @@
-use crate::parse::{Parser, try_parse};
+use crate::{borrow::as_str, parse::{Parser, try_parse}};
 use std::{
     borrow::Cow,
     fmt::{Debug, Display},
@@ -190,9 +190,9 @@ impl<'src> String<'src> {
         codepoints.collect_to_string()
     }
 
-    pub fn borrowed(&self) -> String<'_> {
+    pub const fn borrowed(&self) -> String<'_> {
         String {
-            bytes: Cow::Borrowed(&self.bytes),
+            bytes: Cow::Borrowed(as_str(&self.bytes)),
         }
     }
 
@@ -207,8 +207,8 @@ impl<'src> String<'src> {
     }
 
     /// The underlying JSON string data, without the delimiting quotes. Escape sequences are not decoded.
-    pub fn source(&self) -> &str {
-        &self.bytes
+    pub const fn source(&self) -> &str {
+        as_str(&self.bytes)
     }
 
     /// Produce an iterator over the parts of this JSON string. Each part is one of

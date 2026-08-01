@@ -1,6 +1,6 @@
 //! JSON404 is a fully ECMA-404 compliant JSON parser and generator.
 
-use std::{fmt::Display, ops::Deref};
+use std::fmt::Display;
 
 pub mod array;
 pub mod number;
@@ -10,56 +10,14 @@ pub mod string;
 pub mod error;
 pub mod parse;
 
+mod borrow;
+
 pub use array::Array;
 pub use number::Number;
 pub use object::Object;
 pub use string::String;
 
 pub type Result<T> = std::result::Result<T, error::SyntaxError>;
-
-/// A specialization of [`std::borrow::Cow`] to slices. This type is covariant in `T`
-/// while Cow is invariant.
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum CowSlice<'src, T> {
-    Borrowed(&'src [T]),
-    Owned(Vec<T>),
-}
-
-impl<T> CowSlice<'_, T> {
-    const fn as_slice(&self) -> &[T] {
-        match self {
-            CowSlice::Borrowed(values) => values,
-            CowSlice::Owned(values) => values.as_slice(),
-        }
-    }
-}
-
-impl<T: Clone> CowSlice<'_, T> {
-    fn to_mut(&mut self) -> &mut Vec<T> {
-        if let Self::Borrowed(items) = self {
-            *self = CowSlice::Owned(items.to_owned());
-        }
-        let Self::Owned(items) = self else {
-            unreachable!();
-        };
-        items
-    }
-
-    fn into_owned(self) -> Vec<T> {
-        match self {
-            CowSlice::Borrowed(items) => items.to_vec(),
-            CowSlice::Owned(items) => items,
-        }
-    }
-}
-
-impl<T> Deref for CowSlice<'_, T> {
-    type Target = [T];
-
-    fn deref(&self) -> &Self::Target {
-        self.as_slice()
-    }
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Value<'src> {
