@@ -1,11 +1,6 @@
-use std::{
-    borrow::Cow,
-    fmt::Display,
-    mem,
-    num::NonZeroUsize,
-};
+use std::{borrow::Cow, fmt::Display, mem, num::NonZeroUsize};
 
-use crate::parse::{Expected, Reason, SyntaxError};
+use crate::error::{Expected, Reason, SyntaxError};
 
 #[derive(Debug, Clone, Eq)]
 pub struct Number<'src> {
@@ -336,7 +331,7 @@ pub(crate) fn parse(src: &str, cur_idx: usize) -> Result<(usize, Number<'_>), Sy
                     &[Expected::Punctuation('-'), Expected::Digit]
                 },
                 actual: item.map(|&x| x.into()),
-            })
+            });
         }
     }
 
@@ -386,7 +381,7 @@ pub(crate) fn parse(src: &str, cur_idx: usize) -> Result<(usize, Number<'_>), Sy
                         Expected::Digit,
                     ],
                     actual: next.map(|&x| x.into()),
-                })
+                });
             }
         }
         idx += 1;

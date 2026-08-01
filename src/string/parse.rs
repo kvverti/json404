@@ -1,4 +1,7 @@
-use crate::parse::{Expected, Parser, Reason, SyntaxError};
+use crate::{
+    error::{Expected, Reason, SyntaxError},
+    parse::Parser,
+};
 
 /// Parsing implementation for strings.
 impl<'src> Parser<'src> {
@@ -87,21 +90,33 @@ mod tests {
 
     #[test]
     fn whitespace() {
-        assert_eq!(Parser::new(r#"   "hello world"   "#).string(), Ok("hello world"));
+        assert_eq!(
+            Parser::new(r#"   "hello world"   "#).string(),
+            Ok("hello world")
+        );
     }
 
     #[test]
     fn simple_escapes() {
-        assert_eq!(Parser::new(r#""\r\n\\\/\"\b\f\t""#).string(), Ok(r#"\r\n\\\/\"\b\f\t"#));
+        assert_eq!(
+            Parser::new(r#""\r\n\\\/\"\b\f\t""#).string(),
+            Ok(r#"\r\n\\\/\"\b\f\t"#)
+        );
     }
 
     #[test]
     fn unicode_escapes() {
-        assert_eq!(Parser::new(r#""\uD800\uabcd\u1234""#).string(), Ok(r"\uD800\uabcd\u1234"));
+        assert_eq!(
+            Parser::new(r#""\uD800\uabcd\u1234""#).string(),
+            Ok(r"\uD800\uabcd\u1234")
+        );
     }
 
     #[test]
     fn complex() {
-        assert_eq!(Parser::new(r#""this is \\\" a \u000a \t reall/ \\""#).string(), Ok(r#"this is \\\" a \u000a \t reall/ \\"#));
+        assert_eq!(
+            Parser::new(r#""this is \\\" a \u000a \t reall/ \\""#).string(),
+            Ok(r#"this is \\\" a \u000a \t reall/ \\"#)
+        );
     }
 }

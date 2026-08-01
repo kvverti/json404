@@ -1,4 +1,4 @@
-use crate::parse::{Parser, SyntaxError, try_parse};
+use crate::parse::{Parser, try_parse};
 use std::{
     borrow::Cow,
     fmt::{Debug, Display},
@@ -296,7 +296,7 @@ impl<'src> FromIterator<Codepoint> for String<'src> {
 }
 
 #[doc(hidden)]
-pub const fn parse(src: &str) -> Result<String<'_>, SyntaxError> {
+pub const fn parse(src: &str) -> crate::Result<String<'_>> {
     match Parser::new(src).string() {
         Ok(content) => Ok(String {
             bytes: Cow::Borrowed(content),
@@ -315,7 +315,7 @@ pub struct Parts<'src> {
 }
 
 impl Iterator for Parts<'_> {
-    type Item = Result<StringPart, SyntaxError>;
+    type Item = crate::Result<StringPart>;
 
     fn next(&mut self) -> Option<Self::Item> {
         todo!()
@@ -346,7 +346,7 @@ pub struct Chars<'src> {
 }
 
 impl Iterator for Chars<'_> {
-    type Item = Result<Result<char, u16>, SyntaxError>;
+    type Item = crate::Result<Result<char, u16>>;
 
     fn next(&mut self) -> Option<Self::Item> {
         let part = try_parse!(self.src.next())?;

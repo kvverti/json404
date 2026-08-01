@@ -3,10 +3,19 @@
 use std::{fmt::Display, ops::Deref};
 
 pub mod array;
-pub mod object;
 pub mod number;
+pub mod object;
 pub mod string;
+
+pub mod error;
 pub mod parse;
+
+pub use array::Array;
+pub use number::Number;
+pub use object::Object;
+pub use string::String;
+
+pub type Result<T> = std::result::Result<T, error::SyntaxError>;
 
 /// A specialization of [`std::borrow::Cow`] to slices. This type is covariant in `T`
 /// while Cow is invariant.
@@ -42,7 +51,7 @@ impl<T: Clone> CowSlice<'_, T> {
             CowSlice::Owned(items) => items,
         }
     }
-} 
+}
 
 impl<T> Deref for CowSlice<'_, T> {
     type Target = [T];
@@ -54,10 +63,10 @@ impl<T> Deref for CowSlice<'_, T> {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Value<'src> {
-    Array(array::Array<'src>),
-    Obeject(object::Object<'src>),
-    Number(number::Number<'src>),
-    String(string::String<'src>),
+    Array(Array<'src>),
+    Obeject(Object<'src>),
+    Number(Number<'src>),
+    String(String<'src>),
     True,
     False,
     Null,
