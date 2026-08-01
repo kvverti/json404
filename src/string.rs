@@ -89,7 +89,7 @@ pub trait ToCodepoints {
     }
 }
 
-impl<T: ToCodepoints> ToCodepoints for &T {
+impl<T: ?Sized + ToCodepoints> ToCodepoints for &T {
     type CodepointIter<'a>
         = <T as ToCodepoints>::CodepointIter<'a>
     where
@@ -130,14 +130,6 @@ impl DoubleEndedIterator for StrCodepoints<'_> {
     }
 }
 
-impl ToCodepoints for str {
-    type CodepointIter<'a> = StrCodepoints<'a>;
-
-    fn to_codepoints(&self) -> Self::CodepointIter<'_> {
-        StrCodepoints { iter: self.chars() }
-    }
-}
-
 impl ToCodepoints for &str {
     type CodepointIter<'a>
         = StrCodepoints<'a>
@@ -145,7 +137,7 @@ impl ToCodepoints for &str {
         Self: 'a;
 
     fn to_codepoints(&self) -> Self::CodepointIter<'_> {
-        (*self).to_codepoints()
+        StrCodepoints { iter: self.chars() }
     }
 
     fn collect_to_string<'src>(&self) -> String<'src>
@@ -171,17 +163,6 @@ impl ToCodepoints for [Codepoint] {
 
     fn to_codepoints(&self) -> Self::CodepointIter<'_> {
         self.into_iter().copied()
-    }
-}
-
-impl ToCodepoints for &[Codepoint] {
-    type CodepointIter<'a>
-        = std::iter::Copied<std::slice::Iter<'a, Codepoint>>
-    where
-        Self: 'a;
-
-    fn to_codepoints(&self) -> Self::CodepointIter<'_> {
-        (*self).to_codepoints()
     }
 }
 
@@ -302,7 +283,8 @@ impl<'src> FromIterator<Codepoint> for String<'src> {
             } else {
                 use std::fmt::Write as _;
                 assert!(codepoint.index() <= 0xFFFF);
-                write!(contents, r"\u{:04X}", codepoint.index()).expect("formatting to string must not fail");
+                write!(contents, r"\u{:04X}", codepoint.index())
+                    .expect("formatting to string must not fail");
             }
         }
         Self {
