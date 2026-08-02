@@ -21,7 +21,7 @@ impl Codepoint {
     /// Constructs a `Codepoint` with the given Unicode codepoint
     /// index. Returns `None` if the index is out of range.
     pub const fn new(index: u32) -> Option<Self> {
-        if index <= 0x1F_FFFF {
+        if index <= char::MAX as u32 {
             Some(Self(index))
         } else {
             None
