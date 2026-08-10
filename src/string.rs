@@ -1,7 +1,4 @@
-use crate::{
-    borrow::as_str,
-    parse::Parser,
-};
+use crate::{borrow::as_str, parse::Parser};
 use std::{
     borrow::Cow,
     fmt::{Debug, Display},
@@ -181,7 +178,7 @@ impl ToCodepoints for [Codepoint] {
 /// - `"Hello"` and `"Hell\u006F"` (Unicode escapes are not decoded)
 /// - `"\uabcd"` and `"\uABCD"` (case of Unicode escapes is not normalized)
 /// - `"\n"` and `"\u000A` (Unicode escapes and simple escapes are not normalized)
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct String<'src> {
     /// The underlying data, not including the delimiting quotes.
     bytes: Cow<'src, str>,
@@ -211,6 +208,34 @@ impl<'src> String<'src> {
     /// The underlying JSON string data, without the delimiting quotes. Escape sequences are not decoded.
     pub const fn source(&self) -> &str {
         as_str(&self.bytes)
+    }
+
+    /// Attempts to decode the string into a Rust `str`. Escape sequences are decoded into their corresponding
+    /// value as specified in ECMA-404. As JSON strings may contain unpaired surrogate codepoints, this method
+    /// returns an error if one is encountered.
+    pub fn decode(&self) -> Result<Cow<'_, str>, StringValueError> {
+        if self.bytes.contains('\\') {
+            self.chars()
+                .enumerate()
+                .map(|(pos, res)| res.map_err(|surrogate| StringValueError { pos, surrogate }))
+                .collect()
+        } else {
+            // no escapes == identity decoding
+            Ok(Cow::Borrowed(&self.bytes))
+        }
+    }
+
+    /// Decodes the string into a Rust `str`. Escape sequences are decoded into their corresponding values,
+    /// and unpaired surrogates are replaced with the Unicode replacement character.
+    pub fn decode_lossy(&self) -> Cow<'_, str> {
+        if self.bytes.contains('\\') {
+            self.chars()
+                .map(|res| res.unwrap_or(char::REPLACEMENT_CHARACTER))
+                .collect()
+        } else {
+            // no escapes == identity decoding
+            Cow::Borrowed(&self.bytes)
+        }
     }
 
     /// Produce an iterator over the parts of this JSON string. Each part is one of
@@ -275,24 +300,27 @@ impl<'src> ToCodepoints for String<'src> {
     }
 }
 
+fn extend_codepoint(contents: &mut StdString, codepoint: Codepoint) {
+    if let Some(c) = codepoint.to_char()
+        && c != '/'
+        && let Some(esc) = SimpleEscape::encode(c)
+    {
+        contents.push_str(esc.escape_sequence());
+    } else if let Some(c @ '\u{20}'..) = codepoint.to_char() {
+        contents.push(c);
+    } else {
+        use std::fmt::Write as _;
+        assert!(codepoint.index() <= 0xFFFF);
+        write!(contents, r"\u{:04X}", codepoint.index())
+            .expect("formatting to string must not fail");
+    }
+}
+
 impl<'src> FromIterator<Codepoint> for String<'src> {
     fn from_iter<T: IntoIterator<Item = Codepoint>>(iter: T) -> Self {
         let mut contents = StdString::new();
-        for codepoint in iter {
-            if let Some(c) = codepoint.to_char()
-                && c != '/'
-                && let Some(esc) = SimpleEscape::encode(c)
-            {
-                contents.push_str(esc.escape_sequence());
-            } else if let Some(c @ '\u{20}'..) = codepoint.to_char() {
-                contents.push(c);
-            } else {
-                use std::fmt::Write as _;
-                assert!(codepoint.index() <= 0xFFFF);
-                write!(contents, r"\u{:04X}", codepoint.index())
-                    .expect("formatting to string must not fail");
-            }
-        }
+        iter.into_iter()
+            .for_each(|c| extend_codepoint(&mut contents, c));
         Self {
             bytes: Cow::Owned(contents),
         }
@@ -304,7 +332,7 @@ impl<'src> FromIterator<Part> for String<'src> {
         let mut contents = StdString::new();
         for part in iter {
             match part {
-                Part::Char(c) => contents.push(c),
+                Part::Char(c) => extend_codepoint(&mut contents, Codepoint::from_char(c)),
                 Part::SimpleEscape(escape) => contents.push_str(escape.escape_sequence()),
                 Part::UnicodeEscape(escape) => {
                     contents.push_str(r"\u");
@@ -320,22 +348,35 @@ impl<'src> FromIterator<Part> for String<'src> {
     }
 }
 
-/// Parses a string from JSON string data.
-#[doc(hidden)]
-pub const fn parse(src: &str) -> crate::Result<String<'_>> {
-    match Parser::new(src).string() {
-        Ok(content) => Ok(String {
-            bytes: Cow::Borrowed(content),
-        }),
-        Err(e) => Err(e),
+impl<'src> FromIterator<char> for String<'src> {
+    fn from_iter<T: IntoIterator<Item = char>>(iter: T) -> Self {
+        let mut contents = StdString::new();
+        iter.into_iter()
+            .for_each(|c| extend_codepoint(&mut contents, Codepoint::from_char(c)));
+        Self {
+            bytes: Cow::Owned(contents),
+        }
     }
 }
 
-pub struct StringValueError {
-    pub prefix: StdString,
-    pub codepoint: u16,
+/// Parses a string from JSON string data, used in the [`crate::value!`] macro.
+#[doc(hidden)]
+pub const fn macro_parse(src: &str) -> String<'_> {
+    match Parser::new(src).string() {
+        Ok(content) => String {
+            bytes: Cow::Borrowed(content),
+        },
+        Err(_) => panic!("literal is not valid JSON (did you mean to use a raw string literal?)"),
+    }
 }
 
+#[derive(Debug, Clone)]
+pub struct StringValueError {
+    pub pos: usize,
+    pub surrogate: u16,
+}
+
+#[derive(Debug, Clone)]
 pub struct Parts<'src> {
     src: std::str::Chars<'src>,
 }
@@ -374,6 +415,7 @@ impl Iterator for Parts<'_> {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct Codepoints<'src> {
     src: Parts<'src>,
 }
@@ -390,6 +432,7 @@ impl Iterator for Codepoints<'_> {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct Chars<'src> {
     src: std::iter::Peekable<Parts<'src>>,
 }
