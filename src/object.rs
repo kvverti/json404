@@ -70,8 +70,12 @@ pub struct Object<'src> {
 impl<'src> Object<'src> {
     /// Constructs a new empty `Object`.
     pub const fn new() -> Self {
+        Self::from_slice(&[])
+    }
+
+    pub const fn from_slice(entries: &'src [KV<'src>]) -> Self {
         Self {
-            entries: CowSlice::Borrowed(&[]),
+            entries: CowSlice::Borrowed(entries),
         }
     }
 
