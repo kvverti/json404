@@ -3,81 +3,20 @@ use std::{
     borrow::Cow,
     fmt::{Debug, Display},
     mem,
+    num::NonZeroU16,
     string::String as StdString,
 };
 
 mod parse;
 
-/// A Unicode codepoint. A `Codepoint` is like a `char`, except that surrogate
-/// codepoints are allowed.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-#[repr(transparent)]
-pub struct Codepoint(u32);
-
-impl Codepoint {
-    /// Constructs a `Codepoint` with the given Unicode codepoint
-    /// index. Returns `None` if the index is out of range.
-    pub const fn new(index: u32) -> Option<Self> {
-        if index <= char::MAX as u32 {
-            Some(Self(index))
-        } else {
-            None
-        }
-    }
-
-    /// Returns the Unicode codepoint index of this codepoint.
-    pub const fn index(self) -> u32 {
-        self.0
-    }
-
-    /// Constructs the `Codepoint` corresponding to the given `char`.
-    pub const fn from_char(c: char) -> Self {
-        Self(c as u32)
-    }
-
-    /// Returns the `char` corresponding to this codepoint, if it is
-    /// not a surrogate codepoint.
-    pub const fn to_char(self) -> Option<char> {
-        char::from_u32(self.0)
-    }
-
-    /// Constructs a `Codepoint` on the basic multilingual plane. This plane
-    /// contains the surrogate codepoints.
-    pub const fn from_bmp(index: u16) -> Self {
-        Self(index as u32)
-    }
-
-    /// Whether this codepoint is a surrogate codepoint.
-    /// Surrogate codepoints are the range U+D800 through U+DFFF.
-    pub const fn is_surrogate(self) -> bool {
-        matches!(self.0, 0xD800..=0xDFFF)
-    }
-}
-
-impl Debug for Codepoint {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "U+{:X}", self.0)?;
-        if let Some(c) = self.to_char() {
-            write!(f, " '{}'", c)?;
-        }
-        Ok(())
-    }
-}
-
-impl From<char> for Codepoint {
-    fn from(value: char) -> Self {
-        Self::from_char(value)
-    }
-}
-
-/// A trait for types which may be turned into a sequence of codepoints.
+/// A trait for types which may be turned into a sequence of BMP codepoints.
 pub trait ToCodepoints {
-    /// The [`Iterator`] type returned by [`Self::into_codepoints`].
-    type CodepointIter<'a>: Iterator<Item = Codepoint>
+    /// The [`Iterator`] type returned by [`Self::to_codepoints`].
+    type CodepointIter<'a>: Iterator<Item = u16>
     where
         Self: 'a;
 
-    /// Produce a sequence of codepoints.
+    /// Produce a sequence of BMP codepoints.
     fn to_codepoints(&self) -> Self::CodepointIter<'_>;
 
     /// Produce a [`String`] containing the sequence of codepoints. It should produce
@@ -110,37 +49,14 @@ impl<T: ?Sized + ToCodepoints> ToCodepoints for &T {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct StrCodepoints<'a> {
-    iter: std::str::Chars<'a>,
-}
-
-impl Iterator for StrCodepoints<'_> {
-    type Item = Codepoint;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        Some(Codepoint::from_char(self.iter.next()?))
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        self.iter.size_hint()
-    }
-}
-
-impl DoubleEndedIterator for StrCodepoints<'_> {
-    fn next_back(&mut self) -> Option<Self::Item> {
-        Some(Codepoint::from_char(self.iter.next_back()?))
-    }
-}
-
 impl ToCodepoints for &str {
     type CodepointIter<'a>
-        = StrCodepoints<'a>
+        = std::str::EncodeUtf16<'a>
     where
         Self: 'a;
 
     fn to_codepoints(&self) -> Self::CodepointIter<'_> {
-        StrCodepoints { iter: self.chars() }
+        self.encode_utf16()
     }
 
     fn collect_to_string<'src>(&self) -> String<'src>
@@ -161,11 +77,19 @@ impl ToCodepoints for &str {
     }
 }
 
-impl ToCodepoints for [Codepoint] {
-    type CodepointIter<'a> = std::iter::Copied<std::slice::Iter<'a, Codepoint>>;
+impl ToCodepoints for [u16] {
+    type CodepointIter<'a> = std::iter::Copied<std::slice::Iter<'a, u16>>;
 
     fn to_codepoints(&self) -> Self::CodepointIter<'_> {
         self.into_iter().copied()
+    }
+}
+
+impl<const N: usize> ToCodepoints for [u16; N] {
+    type CodepointIter<'a> = std::iter::Copied<std::slice::Iter<'a, u16>>;
+
+    fn to_codepoints(&self) -> Self::CodepointIter<'_> {
+        self.iter().copied()
     }
 }
 
@@ -255,10 +179,13 @@ impl<'src> String<'src> {
         }
     }
 
-    /// Produce an iterator over the codepoints represented in this JSON string. Surrogate pairs are treated
-    /// as two separate codepoints.
+    /// Produce an iterator over the codepoints represented in this JSON string. Supplementary characters are decoded
+    /// into surrogate pairs.
     pub fn codepoints(&self) -> Codepoints<'_> {
-        Codepoints { src: self.parts() }
+        Codepoints {
+            src: self.parts(),
+            lo_surrogate: None,
+        }
     }
 
     /// Produce an iterator over the characters represented in this JSON string. Surrogate pairs are decoded
@@ -307,27 +234,26 @@ impl<'src> ToCodepoints for String<'src> {
     }
 }
 
-fn extend_codepoint(contents: &mut StdString, codepoint: Codepoint) {
-    if let Some(c) = codepoint.to_char()
+fn extend_from_unicode(contents: &mut StdString, codepoint: u32) {
+    if let Some(c) = char::from_u32(codepoint)
         && c != '/'
         && let Some(esc) = SimpleEscape::encode(c)
     {
         contents.push_str(esc.escape_sequence());
-    } else if let Some(c @ '\u{20}'..) = codepoint.to_char() {
+    } else if let Some(c @ '\u{20}'..) = char::from_u32(codepoint) {
         contents.push(c);
     } else {
         use std::fmt::Write as _;
-        assert!(codepoint.index() <= 0xFFFF);
-        write!(contents, r"\u{:04X}", codepoint.index())
-            .expect("formatting to string must not fail");
+        assert!(codepoint <= 0xFFFF);
+        write!(contents, r"\u{:04X}", codepoint).expect("formatting to string must not fail");
     }
 }
 
-impl<'src> FromIterator<Codepoint> for String<'src> {
-    fn from_iter<T: IntoIterator<Item = Codepoint>>(iter: T) -> Self {
+impl<'src> FromIterator<u16> for String<'src> {
+    fn from_iter<T: IntoIterator<Item = u16>>(iter: T) -> Self {
         let mut contents = StdString::new();
         iter.into_iter()
-            .for_each(|c| extend_codepoint(&mut contents, c));
+            .for_each(|c| extend_from_unicode(&mut contents, c.into()));
         Self {
             bytes: Cow::Owned(contents),
         }
@@ -339,7 +265,7 @@ impl<'src> FromIterator<Part> for String<'src> {
         let mut contents = StdString::new();
         for part in iter {
             match part {
-                Part::Char(c) => extend_codepoint(&mut contents, Codepoint::from_char(c)),
+                Part::Char(c) => extend_from_unicode(&mut contents, c.into()),
                 Part::SimpleEscape(escape) => contents.push_str(escape.escape_sequence()),
                 Part::UnicodeEscape(escape) => {
                     contents.push_str(r"\u");
@@ -359,7 +285,7 @@ impl<'src> FromIterator<char> for String<'src> {
     fn from_iter<T: IntoIterator<Item = char>>(iter: T) -> Self {
         let mut contents = StdString::new();
         iter.into_iter()
-            .for_each(|c| extend_codepoint(&mut contents, Codepoint::from_char(c)));
+            .for_each(|c| extend_from_unicode(&mut contents, c.into()));
         Self {
             bytes: Cow::Owned(contents),
         }
@@ -425,16 +351,29 @@ impl Iterator for Parts<'_> {
 #[derive(Debug, Clone)]
 pub struct Codepoints<'src> {
     src: Parts<'src>,
+    lo_surrogate: Option<NonZeroU16>,
 }
 
 impl Iterator for Codepoints<'_> {
-    type Item = Codepoint;
+    type Item = u16;
 
     fn next(&mut self) -> Option<Self::Item> {
+        if let Some(lo) = self.lo_surrogate.take() {
+            return Some(lo.get());
+        }
         match self.src.next()? {
-            Part::Char(c) => Some(c.into()),
-            Part::SimpleEscape(escape) => Some(Codepoint::from_char(escape.decode())),
-            Part::UnicodeEscape(escape) => Some(Codepoint::from_bmp(escape.to_codepoint())),
+            Part::Char(c) if let Ok(cp) = u16::try_from(c) => Some(cp),
+            Part::Char(c) => {
+                let combined = u32::from(c) - 0x10000;
+                let hi = u16::try_from(0xD800 | ((combined >> 10) & 0x3FF))
+                    .expect("hi surrogate must fit in a u16");
+                let lo = u16::try_from(0xDC00 | (combined & 0x3FF))
+                    .expect("lo surrogate must fit in a u16");
+                self.lo_surrogate = NonZeroU16::new(lo);
+                Some(hi)
+            }
+            Part::SimpleEscape(escape) => Some(escape.decode() as u16),
+            Part::UnicodeEscape(escape) => Some(escape.to_codepoint()),
         }
     }
 }
@@ -724,7 +663,9 @@ mod tests {
 
     fn round_trip(s: &str) {
         let encoded = String::encode(s);
-        let decoded = encoded.decode().expect("encoded str must have valid decode");
+        let decoded = encoded
+            .decode()
+            .expect("encoded str must have valid decode");
         assert_eq!(decoded, s);
 
         let clone_encoded = String::encode(&encoded);
@@ -739,5 +680,16 @@ mod tests {
         round_trip("\n\t\u{3}");
         round_trip("\u{10FFFF}");
         round_trip(r"\uFFFF");
+    }
+
+    #[test]
+    fn codepoints() {
+        let literal = String::encode("\u{1D11E}");
+        let escaped = String::encode([0xD834, 0xDD1E]);
+        assert_ne!(literal, escaped, "strings do not have equal contents with the current implementation");
+        assert!(
+            literal.codepoint_eq(&escaped),
+            "strings should represent equal codepoints"
+        );
     }
 }
