@@ -151,7 +151,7 @@ impl ToCodepoints for &str {
             .bytes()
             .any(|b| matches!(b, b'\x00'..=b'\x1F' | b'\\' | b'"'))
         {
-            (*self).collect_to_string()
+            self.to_codepoints().collect()
         } else {
             // the contents are all valid literal JSON string characters
             String {
@@ -185,6 +185,13 @@ pub struct String<'src> {
 }
 
 impl<'src> String<'src> {
+    /// Construct a new empty string.
+    pub const fn new() -> Self {
+        Self {
+            bytes: Cow::Borrowed(""),
+        }
+    }
+
     /// Creates a `String` containing the given codepoint sequence. Use this function to create
     /// a `String` from a string literal or slice.
     pub fn encode<I: 'src + ToCodepoints>(codepoints: I) -> Self {
@@ -692,5 +699,45 @@ impl HexDigit {
             HexDigit::Two => HexValue::Two,
             HexDigit::Zero => HexValue::Zero,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn match_src(value: String<'_>, expected: &str) {
+        assert_eq!(value.source(), expected);
+    }
+
+    #[test]
+    fn empty() {
+        match_src(String::new(), "");
+    }
+
+    #[test]
+    fn basic_strs() {
+        match_src(String::encode("hello world"), "hello world");
+        match_src(String::encode("foo \\ bar"), r"foo \\ bar");
+        match_src(String::encode("\u{0}"), r"\u0000");
+    }
+
+    fn round_trip(s: &str) {
+        let encoded = String::encode(s);
+        let decoded = encoded.decode().expect("encoded str must have valid decode");
+        assert_eq!(decoded, s);
+
+        let clone_encoded = String::encode(&encoded);
+        assert_eq!(encoded, clone_encoded);
+    }
+
+    #[test]
+    fn round_trip_decodings() {
+        round_trip("");
+        round_trip("hello");
+        round_trip("\\");
+        round_trip("\n\t\u{3}");
+        round_trip("\u{10FFFF}");
+        round_trip(r"\uFFFF");
     }
 }
