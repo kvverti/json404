@@ -116,6 +116,22 @@ impl<'src> String<'src> {
         }
     }
 
+    /// Parses a `String` from the given JSON value.
+    /// 
+    /// ```
+    /// let json_str = json404::String::parse(r#""abc\\123""#);
+    /// assert!(json_str.is_ok());
+    /// assert!(json_str.unwrap().codepoint_eq(r"abc\123"));
+    /// ```
+    pub const fn parse(src: &'src str) -> crate::Result<Self> {
+        match Parser::new(src).string() {
+            Ok(s) => Ok(Self {
+                bytes: Cow::Borrowed(s),
+            }),
+            Err(e) => Err(e),
+        }
+    }
+
     /// Creates a `String` containing the given codepoint sequence. Use this function to create
     /// a `String` from a string literal or slice.
     pub fn encode<I: 'src + ToCodepoints>(codepoints: I) -> Self {
@@ -197,7 +213,7 @@ impl<'src> String<'src> {
     }
 
     /// Returns whether this string matches the given codepoint sequence.
-    pub fn codepoint_eq<I: ?Sized + ToCodepoints>(&self, other: &I) -> bool {
+    pub fn codepoint_eq<I: ToCodepoints>(&self, other: I) -> bool {
         let mut these_codepoints = self.codepoints();
         let mut those_codepoints = other.to_codepoints();
         loop {
@@ -686,7 +702,10 @@ mod tests {
     fn codepoints() {
         let literal = String::encode("\u{1D11E}");
         let escaped = String::encode([0xD834, 0xDD1E]);
-        assert_ne!(literal, escaped, "strings do not have equal contents with the current implementation");
+        assert_ne!(
+            literal, escaped,
+            "strings do not have equal contents with the current implementation"
+        );
         assert!(
             literal.codepoint_eq(&escaped),
             "strings should represent equal codepoints"
